@@ -112,6 +112,10 @@ async function activeIdsFromStorefront(shopDomain) {
     });
     if (!res.ok) return null;
     const html = await res.text();
+    // Password-protected storefronts (dev stores, pre-launch) render the password
+    // template, not the real theme — no app scripts load there, so liveness can't be
+    // judged. Treat as "no signal" rather than marking everything stale.
+    if (/template-password|\/password["?']/i.test(html)) return null;
     const ids = [];
     for (const sig of signatures) {
       if (sig.scriptHosts?.some((h) => html.includes(h))) ids.push(sig.id);
