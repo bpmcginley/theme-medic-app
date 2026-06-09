@@ -83,18 +83,33 @@ async function getInstalledAppHandles(admin) {
 // Activity signal 1: app-embed blocks registered in config/settings_data.json.
 // Enabled embeds mean the app is installed and switched on. Block types look like
 // "shopify://apps/<app-handle>/blocks/<block>/<uuid>".
+// Walk the parsed settings recursively for app-embed blocks: objects whose `type`
+// matches "shopify://apps/<handle>/...". Shape-proof (current can be an object or a
+// preset-name string; blocks can live under presets). Crucially, uninstalling an app
+// leaves its block behind with `disabled: true` — only ENABLED embeds count as a sign
+// of life; a disabled leftover is exactly the ghost we're hunting.
 function embedHandlesFromSettings(assets) {
   const settings = assets.find((a) => /(^|\/)settings_data\.json$/i.test(a.key));
   if (!settings?.value) return [];
-  // Regex the raw text rather than walking the JSON shape: `current` may be an object
-  // or a preset-name string, and blocks can live under presets — the raw scan is
-  // shape-proof. Disabled embeds still count as "present", which is the safe direction
-  // (an installed-but-toggled-off app is not ghost code).
-  const handles = new Set();
-  const re = /shopify:\/\/apps\/([a-z0-9_-]+)\//gi;
-  let m;
-  while ((m = re.exec(settings.value)) !== null) handles.add(m[1].toLowerCase());
-  return [...handles];
+  const enabled = new Set();
+  let root;
+  try {
+    root = JSON.parse(settings.value);
+  } catch {
+    return [];
+  }
+  const walk = (node) => {
+    if (Array.isArray(node)) {
+      for (const v of node) walk(v);
+      return;
+    }
+    if (!node || typeof node !== "object") return;
+    const m = /^shopify:\/\/apps\/([a-z0-9_-]+)\//i.exec(node.type ?? "");
+    if (m && node.disabled !== true) enabled.add(m[1].toLowerCase());
+    for (const v of Object.values(node)) walk(v);
+  };
+  walk(root);
+  return [...enabled];
 }
 
 // Activity signal 2: which signature script hosts actually load on the public
@@ -163,10 +178,15 @@ export async function deepScan(admin, shopDomain) {
   }
 
   // Dev-terminal diagnostics for classification tuning (no merchant data beyond handles).
+  const settingsRaw = assets.find((a) => /(^|\/)settings_data\.json$/i.test(a.key))?.value ?? "";
+  const allEmbeds = [...settingsRaw.matchAll(/shopify:\/\/apps\/([a-z0-9_-]+)\//gi)].map((m) =>
+    m[1].toLowerCase(),
+  );
   console.log(
     `[medic] classification=${classification} installed=${installed ? installed.length : "n/a"} ` +
       `storefront=${storefrontIds ? storefrontIds.join(",") || "(none)" : "no-signal"} ` +
-      `embeds=${embedHandlesFromSettings(assets).join(",") || "(none)"} assets=${assets.length}`,
+      `embeds-enabled=${embedHandlesFromSettings(assets).join(",") || "(none)"} ` +
+      `embeds-all=${[...new Set(allEmbeds)].join(",") || "(none)"} assets=${assets.length}`,
   );
 
   const scan = scanTheme(assets, opts);
