@@ -187,9 +187,24 @@ async function activeIdsFromStorefront(shopDomain) {
       /* product page is best-effort */
     }
 
+    // "Alive" = the app's script/stylesheet/iframe ACTUALLY LOADS — i.e. its host
+    // appears in a resource-loading attribute. A bare text mention ("Powered by
+    // Judge.me" links, leftover widget markup) is not life; it's often the corpse.
+    const resourceUrls = [
+      ...html.matchAll(/<script[^>]+src=["']([^"']+)["']/gi),
+      ...html.matchAll(/<link[^>]+href=["']([^"']+)["']/gi),
+      ...html.matchAll(/<iframe[^>]+src=["']([^"']+)["']/gi),
+    ].map((m) => m[1].toLowerCase());
+
     const ids = [];
     for (const sig of signatures) {
-      if (sig.scriptHosts?.some((h) => html.includes(h))) ids.push(sig.id);
+      const hit = sig.scriptHosts?.find((h) =>
+        resourceUrls.some((u) => u.includes(h.toLowerCase())),
+      );
+      if (hit) {
+        ids.push(sig.id);
+        console.log(`[medic] storefront-evidence ${sig.id}: resource loading from ${hit}`);
+      }
     }
     return ids;
   } catch {
