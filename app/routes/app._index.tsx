@@ -23,9 +23,9 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { admin } = await authenticate.admin(request);
+  const { admin, session } = await authenticate.admin(request);
   try {
-    const result = await deepScan(admin);
+    const result = await deepScan(admin, session.shop);
     return { ok: true as const, ...result };
   } catch (err) {
     return { ok: false as const, error: err instanceof Error ? err.message : "Scan failed" };
@@ -34,9 +34,13 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
 const kb = (bytes: number) => (bytes / 1024).toFixed(1) + " KB";
 
-const STATUS_BADGE: Record<string, { tone: "critical" | "success" | "attention"; label: string }> = {
+const STATUS_BADGE: Record<
+  string,
+  { tone: "critical" | "success" | "attention" | "warning"; label: string }
+> = {
   ghost: { tone: "critical", label: "Ghost code — app uninstalled" },
   active: { tone: "success", label: "Active app" },
+  stale: { tone: "warning", label: "Likely dead — no sign of life" },
   unknown: { tone: "attention", label: "Detected" },
 };
 
@@ -125,7 +129,14 @@ export default function Index() {
                         </Text>
                       </Box>
                     </InlineStack>
-                    {!data.installedKnown && (
+                    {data.classification === "signals" && (
+                      <Text as="p" tone="subdued" variant="bodySm">
+                        Classification via live-storefront + app-embed signals:
+                        &ldquo;Active&rdquo; apps are verifiably loading; &ldquo;Likely
+                        dead&rdquo; code shows no sign of life.
+                      </Text>
+                    )}
+                    {data.classification === "none" && (
                       <Text as="p" tone="subdued" variant="bodySm">
                         Install state unavailable — detections are shown without
                         ghost/active classification.

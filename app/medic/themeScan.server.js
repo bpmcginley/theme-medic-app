@@ -5,6 +5,7 @@
 // signature engine to find app footprints and ghost code.
 
 import { scanTheme } from "./scanner.js";
+import { signatures } from "./signatures.js";
 
 // Only fetch/scan text files the engine understands; skips images/fonts and keeps the
 // GraphQL payloads sane.
@@ -79,19 +80,79 @@ async function getInstalledAppHandles(admin) {
   }
 }
 
+// Activity signal 1: app-embed blocks registered in config/settings_data.json.
+// Enabled embeds mean the app is installed and switched on. Block types look like
+// "shopify://apps/<app-handle>/blocks/<block>/<uuid>".
+function embedHandlesFromSettings(assets) {
+  const settings = assets.find((a) => /(^|\/)settings_data\.json$/i.test(a.key));
+  if (!settings?.value) return [];
+  const handles = new Set();
+  try {
+    const json = JSON.parse(settings.value);
+    const blocks = json?.current?.blocks ?? {};
+    for (const block of Object.values(blocks)) {
+      const m = /^shopify:\/\/apps\/([^/]+)\//.exec(block?.type ?? "");
+      if (m && block?.disabled !== true) handles.add(m[1].toLowerCase());
+    }
+  } catch {
+    /* unparseable settings — no signal */
+  }
+  return [...handles];
+}
+
+// Activity signal 2: which signature script hosts actually load on the public
+// storefront. A theme reference whose host never appears in the rendered page is
+// likely dead code.
+async function activeIdsFromStorefront(shopDomain) {
+  try {
+    const res = await fetch(`https://${shopDomain}/`, {
+      redirect: "follow",
+      headers: { "User-Agent": "ThemeMedic/1.0 (+https://thememedic.app)" },
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!res.ok) return null;
+    const html = await res.text();
+    const ids = [];
+    for (const sig of signatures) {
+      if (sig.scriptHosts?.some((h) => html.includes(h))) ids.push(sig.id);
+    }
+    return ids;
+  } catch {
+    return null; // password-protected or unreachable storefront — no signal
+  }
+}
+
 /**
  * Full deep scan for the authenticated shop.
- * @returns {{theme: {id,name}, scan: object, installedKnown: boolean}}
+ * @returns {{theme: {id,name}, scan: object, classification: "installed"|"signals"|"none"}}
  */
-export async function deepScan(admin) {
+export async function deepScan(admin, shopDomain) {
   const theme = await getMainTheme(admin);
   if (!theme) throw new Error("No published theme found.");
 
-  const [assets, installed] = await Promise.all([
+  const [assets, installed, storefrontIds] = await Promise.all([
     getThemeFiles(admin, theme.id),
     getInstalledAppHandles(admin),
+    shopDomain ? activeIdsFromStorefront(shopDomain) : Promise.resolve(null),
   ]);
 
-  const scan = scanTheme(assets, installed ? { installedAppHandles: installed } : {});
-  return { theme: { id: theme.id, name: theme.name }, scan, installedKnown: installed != null };
+  let opts = {};
+  let classification = "none";
+  if (installed) {
+    opts = { installedAppHandles: installed };
+    classification = "installed";
+  } else {
+    // Fall back to activity signals: storefront liveness + enabled app embeds.
+    const embedHandles = new Set(embedHandlesFromSettings(assets));
+    const embedIds = signatures
+      .filter((s) => embedHandles.has(s.handle.toLowerCase()))
+      .map((s) => s.id);
+    if (storefrontIds || embedIds.length) {
+      opts = { activeAppIds: [...new Set([...(storefrontIds ?? []), ...embedIds])] };
+      classification = "signals";
+    }
+  }
+
+  const scan = scanTheme(assets, opts);
+  return { theme: { id: theme.id, name: theme.name }, scan, classification };
 }
