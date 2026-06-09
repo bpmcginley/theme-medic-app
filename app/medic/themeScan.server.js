@@ -88,15 +88,18 @@ async function getInstalledAppHandles(admin) {
 // preset-name string; blocks can live under presets). Crucially, uninstalling an app
 // leaves its block behind with `disabled: true` — only ENABLED embeds count as a sign
 // of life; a disabled leftover is exactly the ghost we're hunting.
+// Returns null when settings_data.json is missing/unparseable (NO signal), or the
+// list of enabled embed handles when it parsed (possibly empty — which IS a signal:
+// "we looked, nothing is alive").
 function embedHandlesFromSettings(assets) {
   const settings = assets.find((a) => /(^|\/)settings_data\.json$/i.test(a.key));
-  if (!settings?.value) return [];
+  if (!settings?.value) return null;
   const enabled = new Set();
   let root;
   try {
     root = JSON.parse(settings.value);
   } catch {
-    return [];
+    return null;
   }
   const walk = (node) => {
     if (Array.isArray(node)) {
@@ -161,8 +164,11 @@ export async function deepScan(admin, shopDomain) {
     // Fall back to activity signals: storefront liveness + enabled app embeds.
     // Embed block handles are the app's internal handle (e.g. "judge-me-reviews"),
     // not necessarily its App Store handle — match on normalized substrings.
+    // Both collectors return null for "couldn't look" vs [] for "looked, found none" —
+    // an empty result is still a real signal (nothing is alive).
+    const embedEnabled = embedHandlesFromSettings(assets);
     const norm = (s) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
-    const embedHandles = embedHandlesFromSettings(assets).map(norm);
+    const embedHandles = (embedEnabled ?? []).map(norm);
     const embedIds = signatures
       .filter((s) => {
         const candidates = [norm(s.id), norm(s.handle)].filter((c) => c.length >= 4);
@@ -171,7 +177,7 @@ export async function deepScan(admin, shopDomain) {
         );
       })
       .map((s) => s.id);
-    if (storefrontIds || embedIds.length) {
+    if (storefrontIds !== null || embedEnabled !== null) {
       opts = { activeAppIds: [...new Set([...(storefrontIds ?? []), ...embedIds])] };
       classification = "signals";
     }
@@ -185,7 +191,7 @@ export async function deepScan(admin, shopDomain) {
   console.log(
     `[medic] classification=${classification} installed=${installed ? installed.length : "n/a"} ` +
       `storefront=${storefrontIds ? storefrontIds.join(",") || "(none)" : "no-signal"} ` +
-      `embeds-enabled=${embedHandlesFromSettings(assets).join(",") || "(none)"} ` +
+      `embeds-enabled=${embedHandlesFromSettings(assets)?.join(",") || "(none)"} ` +
       `embeds-all=${[...new Set(allEmbeds)].join(",") || "(none)"} assets=${assets.length}`,
   );
 
