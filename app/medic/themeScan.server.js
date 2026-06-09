@@ -97,7 +97,10 @@ function embedHandlesFromSettings(assets) {
   const enabled = new Set();
   let root;
   try {
-    root = JSON.parse(settings.value);
+    // settings_data.json regularly opens with a /* auto-generated */ comment banner —
+    // valid to Shopify's parser, fatal to JSON.parse. Strip leading block comments.
+    const cleaned = settings.value.replace(/^\s*(\/\*[\s\S]*?\*\/\s*)+/, "");
+    root = JSON.parse(cleaned);
   } catch {
     return null;
   }
