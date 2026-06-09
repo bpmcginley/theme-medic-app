@@ -147,9 +147,17 @@ export async function deepScan(admin, shopDomain) {
     classification = "installed";
   } else {
     // Fall back to activity signals: storefront liveness + enabled app embeds.
-    const embedHandles = new Set(embedHandlesFromSettings(assets));
+    // Embed block handles are the app's internal handle (e.g. "judge-me-reviews"),
+    // not necessarily its App Store handle — match on normalized substrings.
+    const norm = (s) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+    const embedHandles = embedHandlesFromSettings(assets).map(norm);
     const embedIds = signatures
-      .filter((s) => embedHandles.has(s.handle.toLowerCase()))
+      .filter((s) => {
+        const candidates = [norm(s.id), norm(s.handle)].filter((c) => c.length >= 4);
+        return embedHandles.some((h) =>
+          candidates.some((c) => h.includes(c) || c.includes(h)),
+        );
+      })
       .map((s) => s.id);
     if (storefrontIds || embedIds.length) {
       opts = { activeAppIds: [...new Set([...(storefrontIds ?? []), ...embedIds])] };
