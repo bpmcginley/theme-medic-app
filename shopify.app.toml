@@ -12,13 +12,15 @@ scopes = "read_themes"
 [webhooks]
 api_version = "2026-07"
 
-  [[webhooks.subscriptions]]
-  uri = "/webhooks/app/uninstalled"
-  topics = [ "app/uninstalled" ]
-
-  [[webhooks.subscriptions]]
-  uri = "/webhooks/app/scopes_update"
-  topics = [ "app/scopes_update" ]
+# NOTE: webhook subscriptions removed during local dev — Shopify rejects localhost
+# webhook URIs (--use-localhost mode). Restore before production deploy with the
+# public app URL:
+#   [[webhooks.subscriptions]]
+#   uri = "/webhooks/app/uninstalled"
+#   topics = [ "app/uninstalled" ]
+#   [[webhooks.subscriptions]]
+#   uri = "/webhooks/app/scopes_update"
+#   topics = [ "app/scopes_update" ]
 
 [auth]
 redirect_urls = [ "https://shopify.dev/apps/default-app-home/api/auth" ]
