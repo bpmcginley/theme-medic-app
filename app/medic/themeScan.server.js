@@ -86,17 +86,14 @@ async function getInstalledAppHandles(admin) {
 function embedHandlesFromSettings(assets) {
   const settings = assets.find((a) => /(^|\/)settings_data\.json$/i.test(a.key));
   if (!settings?.value) return [];
+  // Regex the raw text rather than walking the JSON shape: `current` may be an object
+  // or a preset-name string, and blocks can live under presets — the raw scan is
+  // shape-proof. Disabled embeds still count as "present", which is the safe direction
+  // (an installed-but-toggled-off app is not ghost code).
   const handles = new Set();
-  try {
-    const json = JSON.parse(settings.value);
-    const blocks = json?.current?.blocks ?? {};
-    for (const block of Object.values(blocks)) {
-      const m = /^shopify:\/\/apps\/([^/]+)\//.exec(block?.type ?? "");
-      if (m && block?.disabled !== true) handles.add(m[1].toLowerCase());
-    }
-  } catch {
-    /* unparseable settings — no signal */
-  }
+  const re = /shopify:\/\/apps\/([a-z0-9_-]+)\//gi;
+  let m;
+  while ((m = re.exec(settings.value)) !== null) handles.add(m[1].toLowerCase());
   return [...handles];
 }
 
@@ -164,6 +161,13 @@ export async function deepScan(admin, shopDomain) {
       classification = "signals";
     }
   }
+
+  // Dev-terminal diagnostics for classification tuning (no merchant data beyond handles).
+  console.log(
+    `[medic] classification=${classification} installed=${installed ? installed.length : "n/a"} ` +
+      `storefront=${storefrontIds ? storefrontIds.join(",") || "(none)" : "no-signal"} ` +
+      `embeds=${embedHandlesFromSettings(assets).join(",") || "(none)"} assets=${assets.length}`,
+  );
 
   const scan = scanTheme(assets, opts);
   return { theme: { id: theme.id, name: theme.name }, scan, classification };
