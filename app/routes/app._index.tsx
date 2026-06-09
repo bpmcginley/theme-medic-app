@@ -138,8 +138,10 @@ export default function Index() {
                     )}
                     {data.classification === "none" && (
                       <Text as="p" tone="subdued" variant="bodySm">
-                        Install state unavailable — detections are shown without
-                        ghost/active classification.
+                        Couldn&rsquo;t verify which apps are still alive — your
+                        storefront appears password-protected, so we can&rsquo;t observe
+                        what actually loads. On a public storefront, detections are
+                        classified Active vs. Likely&nbsp;dead automatically.
                       </Text>
                     )}
                   </BlockStack>

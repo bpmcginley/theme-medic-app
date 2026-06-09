@@ -118,29 +118,82 @@ function embedHandlesFromSettings(assets) {
   return [...enabled];
 }
 
-// Activity signal 2: which signature script hosts actually load on the public
-// storefront. A theme reference whose host never appears in the rendered page is
-// likely dead code.
-async function activeIdsFromStorefront(shopDomain) {
+// THE activity signal: which signature script hosts actually load on the public
+// storefront. This is the only reliable liveness test — settings_data embed entries
+// persist fully "enabled" after an app is uninstalled, so they prove nothing.
+// Scans the homepage plus one product page (some apps only load their widget there).
+
+const UA = { "User-Agent": "ThemeMedic/1.0 (+https://thememedic.app)" };
+
+async function fetchStorefrontHtml(url, cookie) {
+  const res = await fetch(url, {
+    redirect: "follow",
+    headers: cookie ? { ...UA, Cookie: cookie } : UA,
+    signal: AbortSignal.timeout(15000),
+  });
+  if (!res.ok) return null;
+  return await res.text();
+}
+
+// Dev stores are always password-protected. For local testing, set
+// MEDIC_STOREFRONT_PASSWORD and we'll unlock the storefront the way a browser does
+// (POST the password form, reuse the storefront_digest cookie).
+async function storefrontCookie(shopDomain) {
+  const pw = process.env.MEDIC_STOREFRONT_PASSWORD;
+  if (!pw) return null;
   try {
-    const res = await fetch(`https://${shopDomain}/`, {
-      redirect: "follow",
-      headers: { "User-Agent": "ThemeMedic/1.0 (+https://thememedic.app)" },
+    const res = await fetch(`https://${shopDomain}/password`, {
+      method: "POST",
+      redirect: "manual",
+      headers: { ...UA, "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ password: pw, form_type: "storefront_password", utf8: "✓" }),
       signal: AbortSignal.timeout(15000),
     });
-    if (!res.ok) return null;
-    const html = await res.text();
-    // Password-protected storefronts (dev stores, pre-launch) render the password
-    // template, not the real theme — no app scripts load there, so liveness can't be
-    // judged. Treat as "no signal" rather than marking everything stale.
-    if (/template-password|\/password["?']/i.test(html)) return null;
+    const setCookie = res.headers.get("set-cookie") ?? "";
+    const m = /storefront_digest=([^;]+)/.exec(setCookie);
+    return m ? `storefront_digest=${m[1]}` : null;
+  } catch {
+    return null;
+  }
+}
+
+async function activeIdsFromStorefront(shopDomain) {
+  try {
+    const cookie = await storefrontCookie(shopDomain);
+    const home = await fetchStorefrontHtml(`https://${shopDomain}/`, cookie);
+    if (!home) return null;
+    // Password page = real theme never rendered = no liveness signal.
+    if (/template-password|\/password["?']/i.test(home)) return null;
+
+    let html = home;
+    // Add one product page: widgets like reviews often only load there.
+    try {
+      const pj = await fetch(`https://${shopDomain}/products.json?limit=1`, {
+        headers: cookie ? { ...UA, Cookie: cookie } : UA,
+        signal: AbortSignal.timeout(10000),
+      });
+      if (pj.ok) {
+        const { products } = await pj.json();
+        const handle = products?.[0]?.handle;
+        if (handle) {
+          const product = await fetchStorefrontHtml(
+            `https://${shopDomain}/products/${handle}`,
+            cookie,
+          );
+          if (product) html += product;
+        }
+      }
+    } catch {
+      /* product page is best-effort */
+    }
+
     const ids = [];
     for (const sig of signatures) {
       if (sig.scriptHosts?.some((h) => html.includes(h))) ids.push(sig.id);
     }
     return ids;
   } catch {
-    return null; // password-protected or unreachable storefront — no signal
+    return null; // unreachable storefront — no signal
   }
 }
 
@@ -163,27 +216,11 @@ export async function deepScan(admin, shopDomain) {
   if (installed) {
     opts = { installedAppHandles: installed };
     classification = "installed";
-  } else {
-    // Fall back to activity signals: storefront liveness + enabled app embeds.
-    // Embed block handles are the app's internal handle (e.g. "judge-me-reviews"),
-    // not necessarily its App Store handle — match on normalized substrings.
-    // Both collectors return null for "couldn't look" vs [] for "looked, found none" —
-    // an empty result is still a real signal (nothing is alive).
-    const embedEnabled = embedHandlesFromSettings(assets);
-    const norm = (s) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
-    const embedHandles = (embedEnabled ?? []).map(norm);
-    const embedIds = signatures
-      .filter((s) => {
-        const candidates = [norm(s.id), norm(s.handle)].filter((c) => c.length >= 4);
-        return embedHandles.some((h) =>
-          candidates.some((c) => h.includes(c) || c.includes(h)),
-        );
-      })
-      .map((s) => s.id);
-    if (storefrontIds !== null || embedEnabled !== null) {
-      opts = { activeAppIds: [...new Set([...(storefrontIds ?? []), ...embedIds])] };
-      classification = "signals";
-    }
+  } else if (storefrontIds !== null) {
+    // Storefront liveness is the only trustworthy signal: settings_data embed entries
+    // stay fully "enabled" after uninstall, so they cannot distinguish dead from alive.
+    opts = { activeAppIds: storefrontIds };
+    classification = "signals";
   }
 
   // Dev-terminal diagnostics for classification tuning (no merchant data beyond handles).
