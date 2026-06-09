@@ -149,9 +149,14 @@ async function storefrontCookie(shopDomain) {
       body: new URLSearchParams({ password: pw, form_type: "storefront_password", utf8: "✓" }),
       signal: AbortSignal.timeout(15000),
     });
-    const setCookie = res.headers.get("set-cookie") ?? "";
-    const m = /storefront_digest=([^;]+)/.exec(setCookie);
-    return m ? `storefront_digest=${m[1]}` : null;
+    // Shopify's storefront password session cookie has changed names over time
+    // (storefront_digest → _shopify_essential) — keep every cookie it sets.
+    const cookies =
+      typeof res.headers.getSetCookie === "function"
+        ? res.headers.getSetCookie()
+        : [res.headers.get("set-cookie")].filter(Boolean);
+    if (!cookies.length) return null;
+    return cookies.map((c) => c.split(";")[0]).join("; ");
   } catch {
     return null;
   }
