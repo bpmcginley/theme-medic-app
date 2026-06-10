@@ -48,10 +48,26 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     // Redirects to Shopify's subscription confirmation page. No returnUrl: the SDK
     // defaults to the embedded app URL, so approval lands the merchant back in the
     // app and the loader re-checks the plan. Test mode until BILLING_LIVE=1.
-    return billing.request({
-      plan: PRO_PLAN,
-      isTest: isTestBilling,
-    });
+    try {
+      return await billing.request({
+        plan: PRO_PLAN,
+        isTest: isTestBilling,
+      });
+    } catch (err) {
+      // billing.request signals the redirect by THROWING a Response — pass it on.
+      if (err instanceof Response) throw err;
+      const errorData = (err as { errorData?: Array<{ field?: string[]; message?: string }> })
+        ?.errorData;
+      console.error(
+        "[medic] billing.request failed:",
+        err instanceof Error ? err.message : err,
+        JSON.stringify(errorData ?? null),
+      );
+      const detail =
+        errorData?.map((e) => `${e.field?.join(".") ?? ""}: ${e.message ?? ""}`).join("; ") ||
+        (err instanceof Error ? err.message : "unknown error");
+      return { ok: false as const, error: `Billing failed — ${detail}` };
+    }
   }
 
   // intent === "scan" — free tier claims a quota slot ATOMICALLY before scanning
