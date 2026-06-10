@@ -112,10 +112,12 @@ export default function Index() {
   const { shop, isPro, scansUsed, scansLimit, testBilling } =
     useLoaderData<typeof loader>();
   const fetcher = useFetcher<typeof action>();
-  const upgradeFetcher = useFetcher();
+  const upgradeFetcher = useFetcher<typeof action>();
   const scanning = fetcher.state !== "idle";
   const upgrading = upgradeFetcher.state !== "idle";
   const data = fetcher.data;
+  const upgradeError =
+    upgradeFetcher.data && !upgradeFetcher.data.ok ? upgradeFetcher.data.error : null;
   const quotaLeft = Math.max(0, scansLimit - scansUsed);
   const quotaExhausted = !isPro && quotaLeft === 0;
 
@@ -172,6 +174,14 @@ export default function Index() {
               </BlockStack>
             </Card>
           </Layout.Section>
+
+          {upgradeError && (
+            <Layout.Section>
+              <Banner tone="critical" title="Upgrade failed">
+                <p>{upgradeError}</p>
+              </Banner>
+            </Layout.Section>
+          )}
 
           {data && !data.ok && (
             <Layout.Section>
