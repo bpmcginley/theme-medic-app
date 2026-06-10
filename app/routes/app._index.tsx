@@ -18,8 +18,9 @@ import { authenticate, PRO_PLAN, isTestBilling } from "../shopify.server";
 import { deepScan } from "../medic/themeScan.server";
 import {
   FREE_SCAN_LIMIT,
+  claimFreeScan,
   hasProPlan,
-  recordScan,
+  releaseScanClaim,
   scansUsedThisMonth,
 } from "../medic/billing.server";
 
@@ -44,23 +45,26 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const intent = formData.get("intent") ?? "scan";
 
   if (intent === "upgrade") {
-    // Redirects to Shopify's subscription confirmation page; on approval the
-    // merchant lands back in the app. Test mode until BILLING_LIVE=1.
+    // Redirects to Shopify's subscription confirmation page. No returnUrl: the SDK
+    // defaults to the embedded app URL, so approval lands the merchant back in the
+    // app and the loader re-checks the plan. Test mode until BILLING_LIVE=1.
     return billing.request({
       plan: PRO_PLAN,
       isTest: isTestBilling,
-      returnUrl: `https://${session.shop}/admin/apps`,
     });
   }
 
-  // intent === "scan" — enforce the free-tier monthly quota.
+  // intent === "scan" — free tier claims a quota slot ATOMICALLY before scanning
+  // (a check-then-act here would be a TOCTOU race for the whole scan duration).
+  // Pro scans create no quota rows, so usage while paid never locks out a shop
+  // that later downgrades.
   const isPro = await hasProPlan(billing, PRO_PLAN, isTestBilling);
   if (!isPro) {
-    const used = await scansUsedThisMonth(session.shop);
-    if (used >= FREE_SCAN_LIMIT) {
+    const claimed = await claimFreeScan(session.shop);
+    if (!claimed) {
       return {
         ok: false as const,
-        error: `Free plan includes ${FREE_SCAN_LIMIT} deep scans per month — you've used all ${used}. Upgrade to Pro for unlimited scans.`,
+        error: `Free plan includes ${FREE_SCAN_LIMIT} deep scans per month — you've used them all. Upgrade to Pro for unlimited scans.`,
         quotaExceeded: true as const,
       };
     }
@@ -68,9 +72,10 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   try {
     const result = await deepScan(admin, session.shop);
-    await recordScan(session.shop);
     return { ok: true as const, ...result };
   } catch (err) {
+    // A failed scan shouldn't cost a free slot.
+    if (!isPro) await releaseScanClaim(session.shop);
     return { ok: false as const, error: err instanceof Error ? err.message : "Scan failed" };
   }
 };

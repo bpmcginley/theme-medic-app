@@ -218,8 +218,39 @@ async function activeIdsFromStorefront(shopDomain) {
 }
 
 /**
+ * @typedef {Object} ScanLocation
+ * @property {number} line
+ * @property {string} text
+ *
+ * @typedef {Object} ScanFinding
+ * @property {string} type
+ * @property {string} severity
+ * @property {string} asset
+ * @property {string} detail
+ * @property {number} [bytes]
+ * @property {ScanLocation[]} [locations]
+ *
+ * @typedef {Object} ScanApp
+ * @property {string} appId
+ * @property {string} app
+ * @property {string} handle
+ * @property {string} category
+ * @property {"ghost"|"active"|"stale"|"unknown"} status
+ * @property {ScanFinding[]} findings
+ * @property {number} bytes
+ * @property {number} estRequests
+ * @property {number} estMs
+ *
+ * @typedef {Object} ScanResult
+ * @property {number} scannedAssets
+ * @property {boolean} haveInstallList
+ * @property {ScanApp[]} apps
+ * @property {{bytes: number, estRequests: number, estMs: number, findings: number, apps: number}} totals
+ */
+
+/**
  * Full deep scan for the authenticated shop.
- * @returns {{theme: {id,name}, scan: object, classification: "installed"|"signals"|"none"}}
+ * @returns {Promise<{theme: {id: string, name: string}, scan: ScanResult, classification: "installed"|"signals"|"none"}>}
  */
 export async function deepScan(admin, shopDomain) {
   const theme = await getMainTheme(admin);
