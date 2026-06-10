@@ -14,18 +14,61 @@ import {
   EmptyState,
 } from "@shopify/polaris";
 import { TitleBar } from "@shopify/app-bridge-react";
-import { authenticate } from "../shopify.server";
+import { authenticate, PRO_PLAN, isTestBilling } from "../shopify.server";
 import { deepScan } from "../medic/themeScan.server";
+import {
+  FREE_SCAN_LIMIT,
+  hasProPlan,
+  recordScan,
+  scansUsedThisMonth,
+} from "../medic/billing.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
-  return { shop: session.shop };
+  const { session, billing } = await authenticate.admin(request);
+  const [isPro, scansUsed] = await Promise.all([
+    hasProPlan(billing, PRO_PLAN, isTestBilling),
+    scansUsedThisMonth(session.shop),
+  ]);
+  return {
+    shop: session.shop,
+    isPro,
+    scansUsed,
+    scansLimit: FREE_SCAN_LIMIT,
+    testBilling: isTestBilling,
+  };
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { admin, session } = await authenticate.admin(request);
+  const { admin, session, billing } = await authenticate.admin(request);
+  const formData = await request.formData();
+  const intent = formData.get("intent") ?? "scan";
+
+  if (intent === "upgrade") {
+    // Redirects to Shopify's subscription confirmation page; on approval the
+    // merchant lands back in the app. Test mode until BILLING_LIVE=1.
+    return billing.request({
+      plan: PRO_PLAN,
+      isTest: isTestBilling,
+      returnUrl: `https://${session.shop}/admin/apps`,
+    });
+  }
+
+  // intent === "scan" — enforce the free-tier monthly quota.
+  const isPro = await hasProPlan(billing, PRO_PLAN, isTestBilling);
+  if (!isPro) {
+    const used = await scansUsedThisMonth(session.shop);
+    if (used >= FREE_SCAN_LIMIT) {
+      return {
+        ok: false as const,
+        error: `Free plan includes ${FREE_SCAN_LIMIT} deep scans per month — you've used all ${used}. Upgrade to Pro for unlimited scans.`,
+        quotaExceeded: true as const,
+      };
+    }
+  }
+
   try {
     const result = await deepScan(admin, session.shop);
+    await recordScan(session.shop);
     return { ok: true as const, ...result };
   } catch (err) {
     return { ok: false as const, error: err instanceof Error ? err.message : "Scan failed" };
@@ -45,10 +88,15 @@ const STATUS_BADGE: Record<
 };
 
 export default function Index() {
-  const { shop } = useLoaderData<typeof loader>();
+  const { shop, isPro, scansUsed, scansLimit, testBilling } =
+    useLoaderData<typeof loader>();
   const fetcher = useFetcher<typeof action>();
+  const upgradeFetcher = useFetcher();
   const scanning = fetcher.state !== "idle";
+  const upgrading = upgradeFetcher.state !== "idle";
   const data = fetcher.data;
+  const quotaLeft = Math.max(0, scansLimit - scansUsed);
+  const quotaExhausted = !isPro && quotaLeft === 0;
 
   return (
     <Page>
@@ -58,30 +106,62 @@ export default function Index() {
           <Layout.Section>
             <Card>
               <BlockStack gap="300">
-                <Text as="h2" variant="headingMd">
-                  Deep theme scan
-                </Text>
+                <InlineStack align="space-between" blockAlign="center">
+                  <Text as="h2" variant="headingMd">
+                    Deep theme scan
+                  </Text>
+                  <Badge tone={isPro ? "success" : "info"}>
+                    {isPro ? "Pro" : `Free — ${quotaLeft} of ${scansLimit} scans left this month`}
+                  </Badge>
+                </InlineStack>
                 <Text as="p" variant="bodyMd" tone="subdued">
                   Scans your live theme for code left behind by apps — including
                   &ldquo;ghost code&rdquo; from apps you&rsquo;ve already uninstalled that still
                   loads on every page and slows down {shop}.
                 </Text>
-                <InlineStack>
+                <InlineStack gap="300">
                   <Button
                     variant="primary"
                     loading={scanning}
-                    onClick={() => fetcher.submit({}, { method: "POST" })}
+                    disabled={quotaExhausted}
+                    onClick={() =>
+                      fetcher.submit({ intent: "scan" }, { method: "POST" })
+                    }
                   >
                     {scanning ? "Scanning theme…" : "Scan my live theme"}
                   </Button>
+                  {!isPro && (
+                    <Button
+                      loading={upgrading}
+                      onClick={() =>
+                        upgradeFetcher.submit({ intent: "upgrade" }, { method: "POST" })
+                      }
+                    >
+                      Upgrade to Pro — $19/mo, 7-day free trial
+                    </Button>
+                  )}
                 </InlineStack>
+                {!isPro && (
+                  <Text as="p" tone="subdued" variant="bodySm">
+                    Pro: unlimited deep scans, plus daily automatic monitoring with
+                    alerts when an app update slows your store down (rolling out).
+                    {testBilling ? " (Billing is in test mode — no real charge.)" : ""}
+                  </Text>
+                )}
               </BlockStack>
             </Card>
           </Layout.Section>
 
           {data && !data.ok && (
             <Layout.Section>
-              <Banner tone="critical" title="Scan failed">
+              <Banner
+                tone={"quotaExceeded" in data && data.quotaExceeded ? "warning" : "critical"}
+                title={
+                  "quotaExceeded" in data && data.quotaExceeded
+                    ? "Monthly scan limit reached"
+                    : "Scan failed"
+                }
+              >
                 <p>{data.error}</p>
               </Banner>
             </Layout.Section>

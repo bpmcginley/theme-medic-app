@@ -13,6 +13,15 @@ datasource db {
   url      = "file:dev.sqlite"
 }
 
+// One row per deep scan, used to enforce the free tier's monthly scan quota.
+model ScanEvent {
+  id        Int      @id @default(autoincrement())
+  shop      String
+  createdAt DateTime @default(now())
+
+  @@index([shop, createdAt])
+}
+
 model Session {
   id                  String    @id
   shop                String
