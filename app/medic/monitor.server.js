@@ -24,38 +24,74 @@ export function summarizeScan(scanResult) {
   };
 }
 
+// Higher = worse. A confirmed-dead "ghost" outranks a "likely dead" stale, etc.
+const STATUS_RANK = { active: 0, unknown: 1, stale: 2, ghost: 3 };
+const BYTES_GROWTH_ABS = 20 * 1024; // +20 KB
+const BYTES_GROWTH_PCT = 0.2; // and +20%
+
+const fc = (a) => a?.findingCount ?? 0; // legacy snapshots may lack findingCount
+const rank = (a) => STATUS_RANK[a?.status] ?? 1;
+
+// An existing app "worsened" if it has more findings, materially more weight, or its
+// classification got worse (e.g. stale -> ghost once we confirm the app is gone).
+function worsened(before, after) {
+  if (fc(after) > fc(before)) return "more findings";
+  if (rank(after) > rank(before)) return "now confirmed dead";
+  const dB = (after.bytes ?? 0) - (before.bytes ?? 0);
+  if (dB >= BYTES_GROWTH_ABS && dB >= (before.bytes ?? 0) * BYTES_GROWTH_PCT) return "heavier";
+  return null;
+}
+
 /**
  * Pure diff between two scan summaries. Flags apps that newly appeared and apps whose
- * footprint grew. Returns { changed, newApps, grewApps, summary }.
+ * footprint grew (by findings, weight, or worsened classification). Returns
+ * { changed, firstScan, newApps, grewApps, summary }.
+ *
+ * `prev` is null on a true first scan, or undefined when the previous snapshot existed
+ * but was unreadable — in the latter case we must NOT re-fire a first-scan alert every
+ * run, so the caller passes an empty summary instead of null.
  */
 export function diffScans(prev, curr) {
   const prevApps = new Map((prev?.apps ?? []).map((a) => [a.appId, a]));
   const currApps = new Map((curr?.apps ?? []).map((a) => [a.appId, a]));
 
   const newApps = [...currApps.values()].filter((a) => !prevApps.has(a.appId));
-  const grewApps = [...currApps.values()].filter((a) => {
-    const before = prevApps.get(a.appId);
-    return before && a.findingCount > before.findingCount;
-  });
+  const grewApps = [...currApps.values()]
+    .map((a) => {
+      const before = prevApps.get(a.appId);
+      if (!before) return null;
+      const reason = worsened(before, a);
+      return reason ? { ...a, reason } : null;
+    })
+    .filter(Boolean);
 
-  // First-ever scan (no prior) with leftovers is itself worth one notification.
-  const firstScanWithJunk = !prev && (curr?.apps?.length ?? 0) > 0;
+  // First-ever scan (no prior at all) with leftovers is worth one notification.
+  const firstScanWithJunk = prev === null && (curr?.apps?.length ?? 0) > 0;
 
   const changed = newApps.length > 0 || grewApps.length > 0 || firstScanWithJunk;
   const parts = [];
   if (newApps.length) parts.push(`${newApps.length} new app(s) left code behind`);
-  if (grewApps.length) parts.push(`${grewApps.length} existing leftover(s) grew`);
+  if (grewApps.length) parts.push(`${grewApps.length} existing leftover(s) got worse`);
   if (firstScanWithJunk && !parts.length) parts.push(`${curr.apps.length} app(s) with leftover code`);
 
   return {
     changed,
-    firstScan: !prev,
+    firstScan: prev === null,
     newApps,
     grewApps,
     summary: changed ? parts.join("; ") + "." : "No new ghost code since last scan.",
   };
 }
 
+const SNAPSHOTS_KEPT = 10; // rolling history per shop — enough for diffs + a short trail
+
+/**
+ * Returns the previous snapshot summary, or:
+ *   - null  → no snapshot has ever been stored (true first scan; alert on junk)
+ *   - {apps:[]} → a snapshot row exists but couldn't be parsed (don't treat as first
+ *     scan — that would re-alert every run; treat as "nothing known prior").
+ * The `at` field carries the row timestamp for the same-day retry guard.
+ */
 export async function latestSnapshot(shop) {
   const row = await prisma.scanSnapshot.findFirst({
     where: { shop },
@@ -65,7 +101,7 @@ export async function latestSnapshot(shop) {
   try {
     return { ...JSON.parse(row.summaryJson), at: row.createdAt };
   } catch {
-    return null;
+    return { apps: [], findings: 0, deadBytes: 0, at: row.createdAt, unreadable: true };
   }
 }
 
@@ -78,6 +114,25 @@ export async function saveSnapshot(shop, summary) {
       summaryJson: JSON.stringify(summary),
     },
   });
+  // Prune to the most recent SNAPSHOTS_KEPT rows so the table can't grow unbounded.
+  const old = await prisma.scanSnapshot.findMany({
+    where: { shop },
+    orderBy: { createdAt: "desc" },
+    skip: SNAPSHOTS_KEPT,
+    select: { id: true },
+  });
+  if (old.length) {
+    await prisma.scanSnapshot.deleteMany({ where: { id: { in: old.map((r) => r.id) } } });
+  }
+}
+
+// True if the shop already has a snapshot dated today (UTC) — used to make the daily
+// sweep idempotent so a scheduler retry can't double-scan or double-email.
+export async function scannedToday(shop) {
+  const start = new Date();
+  start.setUTCHours(0, 0, 0, 0);
+  const n = await prisma.scanSnapshot.count({ where: { shop, createdAt: { gte: start } } });
+  return n > 0;
 }
 
 /**

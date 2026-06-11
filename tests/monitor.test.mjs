@@ -52,6 +52,40 @@ ok(summary.apps.length === 1 && summary.apps[0].appId === "loox", "summary shoul
 const alert = buildAlert("store.myshopify.com", grew);
 ok(alert.subject.length > 0 && /klaviyo/i.test(alert.html), "alert should mention the new app");
 
+// 8) stale -> ghost on the SAME app (no finding-count change) must alert ("confirmed dead").
+const promoted = diffScans(
+  { apps: [{ appId: "loox", name: "Loox", status: "stale", bytes: 1000, findingCount: 2 }] },
+  { apps: [{ appId: "loox", name: "Loox", status: "ghost", bytes: 1000, findingCount: 2 }] },
+);
+ok(promoted.changed && promoted.grewApps.some((a) => a.appId === "loox"), "stale→ghost should alert");
+
+// 9) Bytes-only growth above threshold (+20% and +20KB) alerts; below does not.
+const heavier = diffScans(
+  { apps: [{ appId: "loox", name: "Loox", status: "stale", bytes: 50_000, findingCount: 2 }] },
+  { apps: [{ appId: "loox", name: "Loox", status: "stale", bytes: 90_000, findingCount: 2 }] },
+);
+ok(heavier.changed, "big byte growth should alert");
+const slightly = diffScans(
+  { apps: [{ appId: "loox", name: "Loox", status: "stale", bytes: 50_000, findingCount: 2 }] },
+  { apps: [{ appId: "loox", name: "Loox", status: "stale", bytes: 52_000, findingCount: 2 }] },
+);
+ok(slightly.changed === false, "tiny byte growth should NOT alert");
+
+// 10) Legacy prior snapshot missing findingCount must not crash or false-alert.
+const legacy = diffScans(
+  { apps: [{ appId: "loox", name: "Loox", status: "stale", bytes: 1000 }] }, // no findingCount
+  { apps: [{ appId: "loox", name: "Loox", status: "stale", bytes: 1000, findingCount: 0 }] },
+);
+ok(legacy.changed === false, "legacy missing findingCount should be treated as 0, no alert");
+
+// 11) Unreadable prior ({apps:[]} but NOT null) must not be treated as a first scan.
+const unreadablePrior = diffScans(
+  { apps: [] },
+  { apps: [{ appId: "loox", name: "Loox", status: "stale", bytes: 1000, findingCount: 2 }] },
+);
+ok(!unreadablePrior.firstScan, "empty-but-present prior is not a first scan");
+ok(unreadablePrior.changed && unreadablePrior.newApps.length === 1, "still alerts via newApps");
+
 if (errors.length) {
   console.log("❌ MONITOR TESTS FAILED:");
   for (const e of errors) console.log("   - " + e);

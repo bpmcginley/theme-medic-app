@@ -17,7 +17,7 @@ function alertHtml(shop, diff) {
   }
   if (diff.grewApps.length) {
     blocks.push(
-      `<p><strong>Existing leftovers grew:</strong></p><ul>${diff.grewApps.map((a) => row(a)).join("")}</ul>`,
+      `<p><strong>Existing leftovers got worse:</strong></p><ul>${diff.grewApps.map((a) => row(a, a.reason)).join("")}</ul>`,
     );
   }
   return `

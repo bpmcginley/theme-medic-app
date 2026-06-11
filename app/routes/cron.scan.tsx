@@ -1,69 +1,106 @@
 // routes/cron.scan.tsx
 //
 // Daily monitoring sweep, hit by an external scheduler (Render Cron Job) once a day.
-// Protected by a shared secret. For every shop with a stored offline session that is
-// on Pro and has monitoring enabled, it runs a monitor cycle and emails an alert when
-// new ghost code appears. No-ops cleanly if email/secret aren't configured.
+// Protected by a shared secret (constant-time compare, header only — never in the URL).
+//
+// The sweep runs OFF the request thread: we authorize, kick it off, and return 202
+// immediately, so total work time never depends on shop count (which would otherwise
+// blow past platform HTTP timeouts and silently drop the tail). Shops are processed
+// with bounded concurrency and a hard per-shop deadline so one hung store can't stall
+// the batch, and the same-day guard makes scheduler retries idempotent.
 
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
+import crypto from "node:crypto";
 import prisma from "../db.server";
 import { unauthenticated } from "../shopify.server";
 import { isProViaAdmin } from "../medic/billing.server";
-import { runMonitorForShop, getMonitorConfig } from "../medic/monitor.server";
+import { runMonitorForShop, getMonitorConfig, scannedToday } from "../medic/monitor.server";
 import { sendAlertEmail } from "../medic/email.server";
+
+const SHOP_CONCURRENCY = 3;
+const PER_SHOP_TIMEOUT_MS = 45_000;
+
+function constantTimeEqual(a: string, b: string) {
+  const ab = Buffer.from(a);
+  const bb = Buffer.from(b);
+  if (ab.length !== bb.length) return false;
+  return crypto.timingSafeEqual(ab, bb);
+}
 
 function authorized(request: Request) {
   const secret = process.env.CRON_SECRET;
-  if (!secret) return false; // never run an unprotected sweep
+  if (!secret) return false; // fail closed — never run an unprotected sweep
   const header = request.headers.get("authorization") || "";
-  const url = new URL(request.url);
-  return header === `Bearer ${secret}` || url.searchParams.get("key") === secret;
+  return constantTimeEqual(header, `Bearer ${secret}`);
 }
 
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error(`timed out after ${ms}ms`)), ms);
+    p.then(
+      (v) => { clearTimeout(t); resolve(v); },
+      (e) => { clearTimeout(t); reject(e); },
+    );
+  });
+}
+
+async function processShop(shop: string) {
+  const cfg = await getMonitorConfig(shop);
+  if (cfg && cfg.enabled === false) return { shop, skipped: "monitoring disabled" };
+  if (await scannedToday(shop)) return { shop, skipped: "already scanned today" };
+
+  let admin;
+  try {
+    ({ admin } = await unauthenticated.admin(shop));
+  } catch {
+    return { shop, skipped: "no valid session (likely uninstalled)" };
+  }
+
+  if (!(await isProViaAdmin(admin))) return { shop, skipped: "not Pro" };
+
+  const { diff } = await runMonitorForShop(admin, shop);
+  let emailed = false;
+  if (diff.changed && cfg?.alertEmail) {
+    const r = await sendAlertEmail(cfg.alertEmail, shop, diff);
+    emailed = r.sent;
+  }
+  return { shop, changed: diff.changed, emailed, summary: diff.summary };
+}
+
+// Bounded-concurrency worker pool over the shop list.
 async function runSweep() {
-  // Distinct shops that have an offline session stored (i.e. installed the app).
   const sessions = await prisma.session.findMany({
     where: { isOnline: false },
     select: { shop: true },
     distinct: ["shop"],
   });
+  const shops = sessions.map((s) => s.shop);
 
   const results: Array<Record<string, unknown>> = [];
-  for (const { shop } of sessions) {
-    try {
-      const cfg = await getMonitorConfig(shop);
-      if (cfg && cfg.enabled === false) {
-        results.push({ shop, skipped: "monitoring disabled" });
-        continue;
+  let cursor = 0;
+  async function worker() {
+    while (cursor < shops.length) {
+      const shop = shops[cursor++];
+      try {
+        results.push(await withTimeout(processShop(shop), PER_SHOP_TIMEOUT_MS));
+      } catch (err) {
+        results.push({ shop, error: err instanceof Error ? err.message : "failed" });
       }
-      const { admin } = await unauthenticated.admin(shop);
-      if (!(await isProViaAdmin(admin))) {
-        results.push({ shop, skipped: "not Pro" });
-        continue;
-      }
-      const { diff } = await runMonitorForShop(admin, shop);
-      let emailed = false;
-      if (diff.changed && cfg?.alertEmail) {
-        const r = await sendAlertEmail(cfg.alertEmail, shop, diff);
-        emailed = r.sent;
-      }
-      results.push({ shop, changed: diff.changed, emailed, summary: diff.summary });
-    } catch (err) {
-      results.push({ shop, error: err instanceof Error ? err.message : "failed" });
     }
   }
+  await Promise.all(
+    Array.from({ length: Math.min(SHOP_CONCURRENCY, shops.length || 1) }, worker),
+  );
+  console.log(`[medic][cron] swept ${results.length} shop(s)`);
   return results;
 }
 
-// Support both GET (simple cron pingers) and POST.
-export const loader = async ({ request }: LoaderFunctionArgs) => {
+// Authorize, then run the sweep WITHOUT blocking the response. Errors are logged.
+function kickOff(request: Request): Response {
   if (!authorized(request)) return new Response("Unauthorized", { status: 401 });
-  const results = await runSweep();
-  return Response.json({ ok: true, scanned: results.length, results });
-};
+  runSweep().catch((err) => console.error("[medic][cron] sweep failed:", err));
+  return Response.json({ ok: true, started: true }, { status: 202 });
+}
 
-export const action = async ({ request }: ActionFunctionArgs) => {
-  if (!authorized(request)) return new Response("Unauthorized", { status: 401 });
-  const results = await runSweep();
-  return Response.json({ ok: true, scanned: results.length, results });
-};
+export const loader = ({ request }: LoaderFunctionArgs) => kickOff(request);
+export const action = ({ request }: ActionFunctionArgs) => kickOff(request);
