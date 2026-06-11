@@ -12,8 +12,11 @@ import {
   Box,
   Banner,
   EmptyState,
+  TextField,
+  Checkbox,
 } from "@shopify/polaris";
 import { TitleBar } from "@shopify/app-bridge-react";
+import { useState } from "react";
 import { authenticate, PRO_PLAN, isTestBilling } from "../shopify.server";
 import { deepScan } from "../medic/themeScan.server";
 import {
@@ -23,12 +26,14 @@ import {
   releaseScanClaim,
   scansUsedThisMonth,
 } from "../medic/billing.server";
+import { getMonitorConfig, setMonitorConfig } from "../medic/monitor.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session, billing } = await authenticate.admin(request);
-  const [isPro, scansUsed] = await Promise.all([
+  const [isPro, scansUsed, monitorCfg] = await Promise.all([
     hasProPlan(billing, PRO_PLAN, isTestBilling),
     scansUsedThisMonth(session.shop),
+    getMonitorConfig(session.shop),
   ]);
   return {
     shop: session.shop,
@@ -36,6 +41,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     scansUsed,
     scansLimit: FREE_SCAN_LIMIT,
     testBilling: isTestBilling,
+    alertEmail: monitorCfg?.alertEmail ?? "",
+    monitorEnabled: monitorCfg?.enabled ?? true,
   };
 };
 
@@ -43,6 +50,18 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const { admin, session, billing } = await authenticate.admin(request);
   const formData = await request.formData();
   const intent = formData.get("intent") ?? "scan";
+
+  if (intent === "saveMonitor") {
+    const email = String(formData.get("alertEmail") ?? "").trim();
+    if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+      return { ok: false as const, error: "Enter a valid alert email." };
+    }
+    await setMonitorConfig(session.shop, {
+      alertEmail: email || null,
+      enabled: formData.get("monitorEnabled") === "on",
+    });
+    return { ok: true as const, saved: "monitor" as const };
+  }
 
   if (intent === "upgrade") {
     // Redirects to Shopify's subscription confirmation page. No returnUrl: the SDK
@@ -109,13 +128,20 @@ const STATUS_BADGE: Record<
 };
 
 export default function Index() {
-  const { shop, isPro, scansUsed, scansLimit, testBilling } =
+  const { shop, isPro, scansUsed, scansLimit, testBilling, alertEmail, monitorEnabled } =
     useLoaderData<typeof loader>();
   const fetcher = useFetcher<typeof action>();
   const upgradeFetcher = useFetcher<typeof action>();
+  const monitorFetcher = useFetcher<typeof action>();
   const scanning = fetcher.state !== "idle";
   const upgrading = upgradeFetcher.state !== "idle";
+  const savingMonitor = monitorFetcher.state !== "idle";
   const data = fetcher.data;
+
+  const [emailInput, setEmailInput] = useState(alertEmail);
+  const [enabledInput, setEnabledInput] = useState(monitorEnabled);
+  const monitorSaved =
+    monitorFetcher.data && monitorFetcher.data.ok && "saved" in monitorFetcher.data;
   const upgradeError =
     upgradeFetcher.data && !upgradeFetcher.data.ok ? upgradeFetcher.data.error : null;
   const quotaLeft = Math.max(0, scansLimit - scansUsed);
@@ -198,7 +224,7 @@ export default function Index() {
             </Layout.Section>
           )}
 
-          {data && data.ok && (
+          {data && data.ok && "scan" in data && (
             <>
               <Layout.Section>
                 <Card>
@@ -314,6 +340,69 @@ export default function Index() {
               </Layout.Section>
             </>
           )}
+
+          <Layout.Section>
+            <Card>
+              <BlockStack gap="300">
+                <InlineStack align="space-between" blockAlign="center">
+                  <Text as="h2" variant="headingMd">
+                    Daily monitoring &amp; alerts
+                  </Text>
+                  <Badge tone={isPro ? "success" : "info"}>
+                    {isPro ? "On — Pro" : "Pro feature"}
+                  </Badge>
+                </InlineStack>
+                <Text as="p" tone="subdued" variant="bodyMd">
+                  We re-scan {shop} every day and email you the moment new ghost code
+                  appears — so an app you uninstall can&rsquo;t silently leave junk slowing
+                  your store. {isPro ? "" : "Upgrade to Pro to turn this on."}
+                </Text>
+                <TextField
+                  label="Alert email"
+                  type="email"
+                  autoComplete="email"
+                  value={emailInput}
+                  onChange={setEmailInput}
+                  placeholder="you@store.com"
+                  disabled={!isPro}
+                />
+                <Checkbox
+                  label="Email me when new ghost code is detected"
+                  checked={enabledInput}
+                  onChange={setEnabledInput}
+                  disabled={!isPro}
+                />
+                <InlineStack gap="300" blockAlign="center">
+                  <Button
+                    loading={savingMonitor}
+                    disabled={!isPro}
+                    onClick={() =>
+                      monitorFetcher.submit(
+                        {
+                          intent: "saveMonitor",
+                          alertEmail: emailInput,
+                          monitorEnabled: enabledInput ? "on" : "off",
+                        },
+                        { method: "POST" },
+                      )
+                    }
+                  >
+                    Save monitoring settings
+                  </Button>
+                  {monitorSaved && (
+                    <Text as="span" tone="success" variant="bodySm">
+                      ✓ Saved
+                    </Text>
+                  )}
+                  {monitorFetcher.data && !monitorFetcher.data.ok && (
+                    <Text as="span" tone="critical" variant="bodySm">
+                      {monitorFetcher.data.error}
+                    </Text>
+                  )}
+                </InlineStack>
+              </BlockStack>
+            </Card>
+          </Layout.Section>
         </Layout>
       </BlockStack>
     </Page>

@@ -22,6 +22,28 @@ model ScanEvent {
   @@index([shop, createdAt])
 }
 
+// A compact snapshot of each monitoring scan, kept so the daily monitor can diff the
+// current scan against the previous one and alert on new ghost code. summaryJson is a
+// serialized ScanSummary (see monitor.server.js).
+model ScanSnapshot {
+  id          Int      @id @default(autoincrement())
+  shop        String
+  findings    Int
+  deadBytes   Int
+  summaryJson String
+  createdAt   DateTime @default(now())
+
+  @@index([shop, createdAt])
+}
+
+// Per-shop monitoring preferences (alert email + whether daily monitoring is on).
+model MonitorConfig {
+  shop       String   @id
+  alertEmail String?
+  enabled    Boolean  @default(true)
+  updatedAt  DateTime @updatedAt
+}
+
 model Session {
   id                  String    @id
   shop                String

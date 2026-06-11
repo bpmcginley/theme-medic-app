@@ -72,3 +72,26 @@ export async function hasProPlan(billing, planName, isTest) {
   });
   return hasActivePayment;
 }
+
+/**
+ * Pro check usable WITHOUT a request session (e.g. the cron job's offline admin
+ * client), by querying the subscription directly. Returns true if any active
+ * subscription exists.
+ */
+export async function isProViaAdmin(admin) {
+  try {
+    const res = await admin.graphql(
+      `#graphql
+        query activeSubs {
+          currentAppInstallation {
+            activeSubscriptions { status name }
+          }
+        }`,
+    );
+    const json = await res.json();
+    const subs = json.data?.currentAppInstallation?.activeSubscriptions ?? [];
+    return subs.some((s) => s.status === "ACTIVE");
+  } catch {
+    return false;
+  }
+}
