@@ -1,0 +1,30 @@
+# Triggers Theme Medic's daily monitoring sweep for free (no paid Render Cron service).
+# GitHub runs this on a schedule and pings the app's protected /cron/scan endpoint,
+# which authorizes and kicks off the sweep in the background (returns 202 immediately).
+#
+# Setup (one time):
+#   1. In the GitHub repo: Settings → Secrets and variables → Actions → New secret
+#        CRON_SECRET   = the value Render generated for the app's CRON_SECRET env var
+#   2. (optional) APP_URL secret if your Render URL differs from the default below.
+name: Daily store scan
+
+on:
+  schedule:
+    - cron: "0 13 * * *" # 13:00 UTC daily (~8am ET). Adjust as you like.
+  workflow_dispatch: {} # allows manual runs from the Actions tab
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger monitoring sweep
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          APP_URL: ${{ secrets.APP_URL || 'https://theme-medic-app.onrender.com' }}
+        run: |
+          code=$(curl -sS -o /tmp/out -w "%{http_code}" \
+            -H "Authorization: Bearer ${CRON_SECRET}" \
+            "${APP_URL}/cron/scan")
+          echo "HTTP $code"; cat /tmp/out || true
+          # 202 = sweep accepted/started. Anything else is a failure.
+          test "$code" = "202"

@@ -13,5 +13,13 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     await db.session.deleteMany({ where: { shop } });
   }
 
+  // Delete all of this shop's app data on uninstall (per our privacy policy). Safe to
+  // run even if rows are already gone.
+  await Promise.allSettled([
+    db.scanEvent.deleteMany({ where: { shop } }),
+    db.scanSnapshot.deleteMany({ where: { shop } }),
+    db.monitorConfig.deleteMany({ where: { shop } }),
+  ]);
+
   return new Response();
 };

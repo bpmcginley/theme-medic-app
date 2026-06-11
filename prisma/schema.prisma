@@ -10,7 +10,9 @@ generator client {
 // See https://www.prisma.io/docs/orm/reference/prisma-schema-reference#string for more information
 datasource db {
   provider = "sqlite"
-  url      = "file:dev.sqlite"
+  // Local dev uses prisma/dev.sqlite (via .env). Production points DATABASE_URL at the
+  // mounted Render disk, e.g. file:/data/prod.sqlite, so sessions + data survive deploys.
+  url      = env("DATABASE_URL")
 }
 
 // One row per deep scan, used to enforce the free tier's monthly scan quota.

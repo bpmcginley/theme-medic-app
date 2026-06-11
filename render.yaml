@@ -1,0 +1,47 @@
+# Production deploy for the Theme Medic embedded Shopify app.
+#
+# Starter plan ($7/mo): always-on (required for the daily cron + responsive embedded
+# loads) and a 1GB persistent disk so the SQLite DB (sessions + scan history + monitor
+# settings) survives deploys. SQLite is fine here — a single Starter instance is the
+# only writer.
+services:
+  - type: web
+    name: theme-medic-app
+    runtime: node
+    plan: starter
+    autoDeploy: true
+    healthCheckPath: /healthz
+    buildCommand: npm install && npx prisma generate && npm run build
+    # docker-start = `prisma generate && prisma migrate deploy && remix-serve` — applies
+    # any new migrations against the disk DB on every boot, then serves.
+    startCommand: npm run docker-start
+    disk:
+      name: data
+      mountPath: /data
+      sizeGB: 1
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        value: file:/data/prod.sqlite # SQLite on the mounted disk (persists)
+      - key: SCOPES
+        value: read_themes
+      # The app's public URL — MUST equal this service's URL and match shopify.app.toml.
+      - key: SHOPIFY_APP_URL
+        value: https://theme-medic-app.onrender.com
+      - key: SHOPIFY_API_KEY
+        sync: false # = client_id from shopify.app.toml
+      - key: SHOPIFY_API_SECRET
+        sync: false # from Partner Dashboard → app → API credentials
+      # Shared secret for the daily cron sweep — Render generates a strong value.
+      - key: CRON_SECRET
+        generateValue: true
+      # Email alerts (optional — monitoring works without; alerts just won't send).
+      - key: RESEND_API_KEY
+        sync: false
+      - key: ALERT_FROM_EMAIL
+        sync: false # e.g. "Theme Medic <alerts@thememedic.app>"
+      # Leave UNSET to keep billing in test mode. Set to 1 ONLY when ready to charge
+      # real money.
+      # - key: BILLING_LIVE
+      #   value: "1"
