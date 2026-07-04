@@ -99,7 +99,13 @@ async function runSweep() {
 function kickOff(request: Request): Response {
   if (!authorized(request)) return new Response("Unauthorized", { status: 401 });
   runSweep().catch((err) => console.error("[medic][cron] sweep failed:", err));
-  return Response.json({ ok: true, started: true }, { status: 202 });
+  // Not Response.json(...) — remix-serve only enables native fetch when the
+  // v3_singleFetch future flag is on (it's off here), so the polyfilled
+  // Response lacks the static .json() method. new Response(...) always works.
+  return new Response(JSON.stringify({ ok: true, started: true }), {
+    status: 202,
+    headers: { "content-type": "application/json" },
+  });
 }
 
 export const loader = ({ request }: LoaderFunctionArgs) => kickOff(request);
