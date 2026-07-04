@@ -86,7 +86,7 @@ Online Store 2.0 themes (all). Read-only — compatible with every theme.
 `https://theme-medic-scan.onrender.com/privacy.html`
 
 ## Support / contact
-Email: `support@thememedic.app`  *(set this up — or use your real support inbox)*
+Email: `support@thememedic.app` (already published as the contact address in the live privacy policy)
 
 ---
 

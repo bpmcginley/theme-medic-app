@@ -74,4 +74,4 @@ shows as **Likely dead**.
   scripts actually load — this is how it distinguishes active apps from dead code.
 
 ## Support
-`[your support email]` · Privacy policy: https://theme-medic-scan.onrender.com/privacy.html
+`support@thememedic.app` · Privacy policy: https://theme-medic-scan.onrender.com/privacy.html
