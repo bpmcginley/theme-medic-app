@@ -20,8 +20,8 @@ daily and emails the merchant when new ghost code appears.
 
 ## Test store (please use this — it has real findings pre-seeded)
 
-- **Store:** `[your-demo-store].myshopify.com`
-- **Storefront password (if prompted):** `[storefront password]`
+- **Store:** `storemedic-uqah6ehg.myshopify.com`
+- **Storefront password (if prompted):** `rtalom`
 - The app is already installed on this store, and the theme contains **leftover code
   from an app that was installed and then uninstalled**, so a scan returns real results.
 
