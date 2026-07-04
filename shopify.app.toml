@@ -2,7 +2,7 @@
 
 client_id = "45fc24d307ec26aaf6c32c1e230d5688"
 name = "Theme Medic"
-application_url = "https://shopify.dev/apps/default-app-home"
+application_url = "https://theme-medic-app.onrender.com"
 embedded = true
 
 [access_scopes]
@@ -12,18 +12,18 @@ scopes = "read_themes"
 [webhooks]
 api_version = "2026-07"
 
-# NOTE: webhook subscriptions removed during local dev — Shopify rejects localhost
-# webhook URIs (--use-localhost mode). Restore before production deploy with the
-# public app URL:
-#   [[webhooks.subscriptions]]
-#   uri = "/webhooks/app/uninstalled"
-#   topics = [ "app/uninstalled" ]
-#   [[webhooks.subscriptions]]
-#   uri = "/webhooks/app/scopes_update"
-#   topics = [ "app/scopes_update" ]
+# Restored for production (were removed during --use-localhost dev — Shopify
+# rejects localhost webhook URIs; remove again if running `shopify app dev`).
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/app/uninstalled"
+  topics = [ "app/uninstalled" ]
+
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/app/scopes_update"
+  topics = [ "app/scopes_update" ]
 
 [auth]
-redirect_urls = [ "https://shopify.dev/apps/default-app-home/api/auth" ]
+redirect_urls = [ "https://theme-medic-app.onrender.com/auth/callback" ]
 
 [build]
 include_config_on_deploy = true
