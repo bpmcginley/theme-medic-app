@@ -15,8 +15,8 @@ import {
   TextField,
   Checkbox,
 } from "@shopify/polaris";
-import { TitleBar } from "@shopify/app-bridge-react";
-import { useState } from "react";
+import { TitleBar, useAppBridge } from "@shopify/app-bridge-react";
+import { useEffect, useRef, useState } from "react";
 import { authenticate, PRO_PLAN, isTestBilling } from "../shopify.server";
 import { deepScan } from "../medic/themeScan.server";
 import {
@@ -130,6 +130,7 @@ const STATUS_BADGE: Record<
 export default function Index() {
   const { shop, isPro, scansUsed, scansLimit, testBilling, alertEmail, monitorEnabled } =
     useLoaderData<typeof loader>();
+  const shopify = useAppBridge();
   const fetcher = useFetcher<typeof action>();
   const upgradeFetcher = useFetcher<typeof action>();
   const monitorFetcher = useFetcher<typeof action>();
@@ -137,6 +138,22 @@ export default function Index() {
   const upgrading = upgradeFetcher.state !== "idle";
   const savingMonitor = monitorFetcher.state !== "idle";
   const data = fetcher.data;
+  const reviewRequestedRef = useRef(false);
+
+  // Ask Shopify's native review modal to show once a scan turns up real dead
+  // code — the moment the app has visibly earned its keep. Shopify itself
+  // gates eligibility (cooldown, annual limit, recently-installed, etc.), so
+  // this can only ever be a no-op if the merchant isn't a good candidate.
+  useEffect(() => {
+    if (reviewRequestedRef.current) return;
+    if (!data || !data.ok || !("scan" in data)) return;
+    const deadCodeFound = data.scan.apps.some(
+      (app: any) => app.status === "ghost" || app.status === "stale",
+    );
+    if (!deadCodeFound) return;
+    reviewRequestedRef.current = true;
+    shopify.reviews.request().catch(() => {});
+  }, [data, shopify]);
 
   const [emailInput, setEmailInput] = useState(alertEmail);
   const [enabledInput, setEnabledInput] = useState(monitorEnabled);
