@@ -15,6 +15,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     db.scanEvent.deleteMany({ where: { shop } }),
     db.scanSnapshot.deleteMany({ where: { shop } }),
     db.monitorConfig.deleteMany({ where: { shop } }),
+    db.shoffiNotification.deleteMany({ where: { shop } }),
   ]);
 
   return new Response();

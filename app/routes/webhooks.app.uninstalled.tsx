@@ -19,6 +19,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     db.scanEvent.deleteMany({ where: { shop } }),
     db.scanSnapshot.deleteMany({ where: { shop } }),
     db.monitorConfig.deleteMany({ where: { shop } }),
+    // Clear the Shoffi attribution marker so a later reinstall (possibly via a
+    // different affiliate) re-fires the newMerchant ping and can be re-attributed.
+    db.shoffiNotification.deleteMany({ where: { shop } }),
   ]);
 
   return new Response();
