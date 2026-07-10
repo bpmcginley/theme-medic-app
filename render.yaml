@@ -36,6 +36,11 @@ services:
       # Shared secret for the daily cron sweep — Render generates a strong value.
       - key: CRON_SECRET
         generateValue: true
+      # Shoffi affiliate network — the app's Shoffi Key (Edit app → Shoffi Key). Until
+      # this is set the /v1/newMerchant attribution ping is a no-op. Use the REAL key
+      # (not the test key) so production installs complete the integration.
+      - key: SHOFFI_API_KEY
+        sync: false
       # Email alerts (optional — monitoring works without; alerts just won't send).
       - key: RESEND_API_KEY
         sync: false

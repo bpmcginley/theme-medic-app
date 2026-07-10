@@ -6,11 +6,19 @@ import { NavMenu } from "@shopify/app-bridge-react";
 import polarisStyles from "@shopify/polaris/build/esm/styles.css?url";
 
 import { authenticate } from "../shopify.server";
+import { notifyShoffiNewMerchant } from "../shoffi.server";
 
 export const links = () => [{ rel: "stylesheet", href: polarisStyles }];
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  await authenticate.admin(request);
+  const { session } = await authenticate.admin(request);
+
+  // Fire-and-forget affiliate-attribution ping to Shoffi (once per shop). Must not block
+  // or fail the app load; x-forwarded-for carries the merchant's IP for attribution.
+  void notifyShoffiNewMerchant({
+    shop: session.shop,
+    xff: request.headers.get("x-forwarded-for"),
+  });
 
   return { apiKey: process.env.SHOPIFY_API_KEY || "" };
 };

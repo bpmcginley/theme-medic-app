@@ -46,6 +46,13 @@ model MonitorConfig {
   updatedAt  DateTime @updatedAt
 }
 
+// One row per shop we've told Shoffi about (affiliate-attribution ping). Its presence
+// is the idempotency marker so the /v1/newMerchant POST fires exactly once per install.
+model ShoffiNotification {
+  shop       String   @id
+  notifiedAt DateTime @default(now())
+}
+
 model Session {
   id                  String    @id
   shop                String
